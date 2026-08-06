@@ -37,10 +37,19 @@ func main() {
 	defer st.Close()
 
 	// 生产时钟:epoch 毫秒;测试通过注入固定时钟保证 stale 判定可测。
-	eval := domain.NewStatusEvaluator(func() int64 { return time.Now().UnixMilli() })
+	nowFunc := func() int64 { return time.Now().UnixMilli() }
+	evalV1 := domain.NewStatusEvaluator(nowFunc)
+	evalV2 := domain.NewRuntimeLivenessEvaluator(nowFunc)
+
+	// v1 与 v2 并行挂载在同一端口。
+	// v1 handler 内部模式已含 /v1/ 前缀，直接挂载。
+	// v2 handler 内部模式不含 /v2/ 前缀，通过 StripPrefix 挂载。
+	mux := http.NewServeMux()
+	mux.Handle("/v1/", api.NewHandler(st, evalV1))
+	mux.Handle("/v2/", http.StripPrefix("/v2", api.NewHandlerV2(st, evalV2)))
 
 	log.Printf("robot-platform-service listening on %s (db=%s)", *addr, *dbPath)
-	if err := http.ListenAndServe(*addr, api.NewHandler(st, eval)); err != nil {
+	if err := http.ListenAndServe(*addr, mux); err != nil {
 		log.Fatalf("server: %v", err)
 	}
 }

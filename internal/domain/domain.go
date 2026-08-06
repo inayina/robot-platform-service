@@ -39,11 +39,11 @@ type Heartbeat struct {
 type TaskStatus string
 
 const (
-	TaskPending  TaskStatus = "pending"
-	TaskRunning  TaskStatus = "running"
+	TaskPending   TaskStatus = "pending"
+	TaskRunning   TaskStatus = "running"
 	TaskSucceeded TaskStatus = "succeeded"
-	TaskFailed   TaskStatus = "failed"
-	TaskCanceled TaskStatus = "canceled"
+	TaskFailed    TaskStatus = "failed"
+	TaskCanceled  TaskStatus = "canceled"
 )
 
 // Task 跨域任务统一视图。domain 区分 amr/panda 等域;target 是域语义的透传字段,
@@ -83,11 +83,11 @@ type Alert struct {
 
 // SoftwareVersion 组件版本登记(信封元数据)。v1 仅建表,端点 reserved。
 type SoftwareVersion struct {
-	ID          int64  `json:"id"`
-	Component   string `json:"component"`
-	Repo        string `json:"repo"`
-	GitSHA      string `json:"git_sha"`
-	ReleasedAtMs int64 `json:"released_at_ms"`
+	ID           int64  `json:"id"`
+	Component    string `json:"component"`
+	Repo         string `json:"repo"`
+	GitSHA       string `json:"git_sha"`
+	ReleasedAtMs int64  `json:"released_at_ms"`
 }
 
 // 默认心跳窗口参数:interval 来自设备注册;ok/stale/missing 按倍数判定。

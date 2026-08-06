@@ -1,8 +1,9 @@
 // Package api 提供 v1 HTTP API。
 //
 // 边界(见 ARCHITECTURE_DESIGN.md 3.3):
-//   负责: 设备注册/心跳/状态查询、任务与运行记录、健康检查;
-//   不负责: 控制闭环、数据本体、评测判定、认证(v1 reserved)、多设备调度。
+//
+//	负责: 设备注册/心跳/状态查询、任务与运行记录、健康检查;
+//	不负责: 控制闭环、数据本体、评测判定、认证(v1 reserved)、多设备调度。
 package api
 
 import (
@@ -43,7 +44,7 @@ func NewHandler(st *store.Store, eval *domain.StatusEvaluator) http.Handler {
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status": "ok",
+		"status":  "ok",
 		"time_ms": s.eval.Now(),
 	})
 }
