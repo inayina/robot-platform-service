@@ -1,0 +1,10 @@
+# 构建产物与本地数据
+/platformd
+/data/
+*.db
+*.db-wal
+*.db-shm
+
+# 编辑器
+.vscode/
+.idea/
