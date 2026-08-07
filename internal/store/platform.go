@@ -98,23 +98,21 @@ func writeExternalRefs(tx *sql.Tx, objectKind, objectID string, refs domain.Exte
 // checkExternalRefConflict 检查 ExternalRef 是否已被其他同 kind 对象占用
 func checkExternalRefConflict(tx *sql.Tx, objectKind, objectID string, refs domain.ExternalRefs) error {
 	if len(refs) == 0 { return nil }
-	var namespaceVals []string
-	var args []any
 	for _, r := range refs {
-		namespaceVals = append(namespaceVals, "(?, ?)")
-		args = append(args, r.Namespace, r.Value)
-	}
-	q := fmt.Sprintf(
-		`SELECT 1 FROM external_id_mappings
-		 WHERE object_kind = ? AND (%s) AND object_id != ?
-		 LIMIT 1`, strings.Join(namespaceVals, " OR "))
-	args = append([]any{objectKind}, args...)
-	args = append(args, objectID)
-	var one int
-	if err := tx.QueryRow(q, args...).Scan(&one); err == nil {
-		return fmt.Errorf("robot %w: external_ref namespace+value already mapped by another %s", ErrConflict, objectKind)
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return err
+		var existingID string
+		err := tx.QueryRow(
+			`SELECT object_id FROM external_id_mappings
+			 WHERE object_kind = ? AND namespace = ? AND value = ? AND object_id != ?
+			 LIMIT 1`,
+			objectKind, r.Namespace, r.Value, objectID,
+		).Scan(&existingID)
+		if err == nil {
+			return fmt.Errorf("%w: external_ref namespace=%s value=%s already mapped by %s %s", 
+				ErrConflict, r.Namespace, r.Value, objectKind, existingID)
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
 	}
 	return nil
 }
@@ -145,6 +143,7 @@ func (s *Store) CreateRobot(ctx context.Context, r *domain.Robot) error {
 	if err := writeExternalRefs(tx, "robot", r.ID, refs); err != nil {
 		return err
 	}
+	r.ExternalRefs = refs // 回写去重后的 refs,API 层返回时不含重复
 	return tx.Commit()
 }
 
@@ -338,9 +337,18 @@ func (s *Store) CreateRuntimeSession(ctx context.Context, sess *domain.RuntimeSe
 		return nil, err
 	}
 
-	// 检查是否已存在(同一 session_id 已创建过)
-	existing, _ := s.GetRuntimeSession(ctx, sess.RuntimeID, sess.SessionID)
-	if existing != nil { return existing, nil }
+	// 检查是否已存在(事务内查询避免读写竞争)
+	var existingState string
+	err = tx.QueryRow(`SELECT session_state FROM runtime_sessions WHERE runtime_id = ? AND session_id = ?`,
+		sess.RuntimeID, sess.SessionID).Scan(&existingState)
+	if err == nil {
+		// 已存在——返回已有记录(幂等)
+		sess.SessionState = domain.SessionState(existingState)
+		return sess, tx.Rollback()
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
 
 	// 将当前 current 改为 superseded
 	if _, err := tx.Exec(`UPDATE runtime_sessions SET session_state = ? WHERE runtime_id = ? AND session_state = ?`,
@@ -424,20 +432,31 @@ func (s *Store) AddRuntimeHeartbeat(ctx context.Context, hb *domain.RuntimeHeart
 	}
 	if maxSeq.Valid {
 		if hb.Seq < maxSeq.Int64 {
-			// 严格回退 → ErrSeqRegression
+			// seq 小于 max——先检查是否为幂等重发(同 seq+同 payload 已记录)
+			var existingReceived int64
+			err := tx.QueryRow(`SELECT received_at FROM runtime_heartbeats WHERE runtime_id=? AND session_id=? AND seq=?`,
+				hb.RuntimeID, hb.SessionID, hb.Seq).Scan(&existingReceived)
+			if err == nil && existingReceived == hb.ReceivedAt {
+				if sessionState == domain.SessionCurrent {
+					tx.Exec(`UPDATE runtime_sessions SET last_heartbeat_at_ms = ? WHERE runtime_id = ? AND session_id = ?`,
+						hb.ReceivedAt, hb.RuntimeID, hb.SessionID)
+				}
+				return sessionState, tx.Commit()
+			}
 			return "", ErrSeqRegression
 		}
 		if hb.Seq == maxSeq.Int64 {
-			// 幂等:同 key 同 ReportedAt → ok
 			var existingReceived int64
 			_ = tx.QueryRow(`SELECT received_at FROM runtime_heartbeats WHERE runtime_id=? AND session_id=? AND seq=?`,
 				hb.RuntimeID, hb.SessionID, hb.Seq).Scan(&existingReceived)
 			if existingReceived == hb.ReceivedAt {
-				if _, err := tx.Exec(`UPDATE runtime_sessions SET last_heartbeat_at_ms = ? WHERE runtime_id = ? AND session_id = ?`,
-					hb.ReceivedAt, hb.RuntimeID, hb.SessionID); err != nil { return "", err }
+				// 只有 current session 更新 last_heartbeat_at_ms
+				if sessionState == domain.SessionCurrent {
+					if _, err := tx.Exec(`UPDATE runtime_sessions SET last_heartbeat_at_ms = ? WHERE runtime_id = ? AND session_id = ?`,
+						hb.ReceivedAt, hb.RuntimeID, hb.SessionID); err != nil { return "", err }
+				}
 				return sessionState, tx.Commit()
 			}
-			// 同 seq 但 payload 不同→拒绝
 			return sessionState, tx.Commit()
 		}
 	}
@@ -447,8 +466,11 @@ func (s *Store) AddRuntimeHeartbeat(ctx context.Context, hb *domain.RuntimeHeart
 		return "", err
 	}
 
-	if _, err := tx.Exec(`UPDATE runtime_sessions SET last_heartbeat_at_ms = ? WHERE runtime_id = ? AND session_id = ?`,
-		hb.ReceivedAt, hb.RuntimeID, hb.SessionID); err != nil { return "", err }
+	// 只有 current session 更新 last_heartbeat_at_ms;superseded/ended 只接收审计
+	if sessionState == domain.SessionCurrent {
+		if _, err := tx.Exec(`UPDATE runtime_sessions SET last_heartbeat_at_ms = ? WHERE runtime_id = ? AND session_id = ?`,
+			hb.ReceivedAt, hb.RuntimeID, hb.SessionID); err != nil { return "", err }
+	}
 	return sessionState, tx.Commit()
 }
 
@@ -518,23 +540,47 @@ func (s *Store) ListRunsV2(ctx context.Context, robotID string) ([]domain.RunV2,
 }
 
 func (s *Store) CreateRunV2(ctx context.Context, run *domain.RunV2) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil { return err }
+	defer tx.Rollback() //nolint:errcheck
+
+	// 校验 task 存在
 	var one int
-	if err := s.db.QueryRowContext(ctx, `SELECT 1 FROM tasks WHERE id = ?`, run.TaskID).Scan(&one); err != nil {
+	if err := tx.QueryRow(`SELECT 1 FROM tasks WHERE id = ?`, run.TaskID).Scan(&one); err != nil {
 		if errors.Is(err, sql.ErrNoRows) { return ErrBadReference }
 		return err
 	}
+
+	// 校验 session 存在
+	var sessRuntimeID string
+	if err := tx.QueryRow(`SELECT runtime_id FROM runtime_sessions WHERE runtime_id = ? AND session_id = ?`,
+		run.RuntimeID, run.SessionID).Scan(&sessRuntimeID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) { return ErrBadReference }
+		return err
+	}
+
+	// 校验 robot-runtime 一致性
+	var rtRobotID string
+	if err := tx.QueryRow(`SELECT robot_id FROM runtimes WHERE id = ?`, run.RuntimeID).Scan(&rtRobotID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) { return ErrBadReference }
+		return err
+	}
+	if rtRobotID != run.RobotID {
+		return ErrRobotMismatch
+	}
+
 	artifactJSON := "{}"
 	if run.ArtifactRef != nil {
 		if b, err := json.Marshal(run.ArtifactRef); err == nil { artifactJSON = string(b) }
 	}
-	if _, err := s.db.ExecContext(ctx,
+	if _, err := tx.Exec(
 		`INSERT INTO runs_v2 (id, task_id, robot_id, runtime_id, session_id, started_at, ended_at, result, artifact_ref_json)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		run.ID, run.TaskID, run.RobotID, run.RuntimeID, run.SessionID,
 		run.StartedMs, run.EndedMs, run.Result, artifactJSON); err != nil {
 		return err
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (s *Store) GetRunV2(ctx context.Context, id string) (*domain.RunV2, error) {
