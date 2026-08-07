@@ -161,7 +161,7 @@ bash scripts/demo.sh
 | 3× < age ≤ 6× | `stale` | `stale` |
 | age > 6× | `missing` | `offline` |
 
-v1 判定见 `internal/domain/status.go`,v2 见 `internal/domain/v2.go:RuntimeLivenessEvaluator`;均可注入时钟。
+v1 判定见 `internal/domain/status.go`,v2 见 `internal/domain/platform.go:RuntimeLivenessEvaluator`;均可注入时钟。
 
 ## 目录结构
 
@@ -173,14 +173,14 @@ internal/
   domain/
     domain.go                    v1: Device/Heartbeat/Task/Run/Alert/SoftwareVersion
     status.go                    v1: ok/stale/missing 判定
-    v2.go                        v2: Robot/DeviceV2/Runtime/RuntimeSession/RuntimeHeartbeat/RunV2/liveness
+    platform.go                  v2: Robot/DeviceV2/Runtime/RuntimeSession/RuntimeHeartbeat/RunV2/liveness
   store/
     store.go                     v1: SQLite 持久化 + 迁移
     schema.sql                   v1+v2 建表(15 张)
-    v2.go                        v2: Robot/DeviceV2/Runtime/Session/Heartbeat 持久化
+    platform.go                   v2: Robot/DeviceV2/Runtime/Session/Heartbeat 持久化
   api/
     api.go                       v1: 9 端点
-    v2.go                        v2: 18 端点
+    platform.go                   v2: 18 端点
   edgeagent/
     agent.go                     Agent 主循环(注册→心跳→信号)
     collector.go                 /proc + /sys 读取(CPU/内存/温度/CAN/OS)
@@ -217,10 +217,10 @@ go test -race ./...
 | 文件 | 内容 |
 |---|---|
 | `internal/domain/domain.go` | v1 实体定义 |
-| `internal/domain/v2.go` | v2 实体定义(Robot/DeviceV2/Runtime/RuntimeSession 等) |
+| `internal/domain/platform.go` | 平台实体定义(Robot/DeviceV2/Runtime/RuntimeSession 等) |
 | `internal/store/store.go` | v1 持久化 |
-| `internal/store/v2.go` | v2 持久化 |
+| `internal/store/platform.go` | 平台持久化 |
 | `internal/api/api.go` | v1 HTTP 路由 |
-| `internal/api/v2.go` | v2 HTTP 路由 |
-| `internal/store/v2_test.go` | v2 存储层测试 |
-| `internal/api/v2_test.go` | v2 API 集成测试 |
+| `internal/api/platform.go` | 平台 HTTP 路由 |
+| `internal/store/platform_test.go` | 平台存储层测试 |
+| `internal/api/platform_test.go` | 平台 API 集成测试 |
