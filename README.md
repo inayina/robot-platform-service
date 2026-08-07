@@ -207,10 +207,14 @@ scripts/
 ## 测试
 
 ```bash
-go test ./...        # v1 + edge-agent 全绿;v2 部分 store 测试待修复
+go test ./...        # v1 + edge-agent + platform 全绿(33/33)
 go vet ./...
 go test -race ./...
 ```
+
+## 背景知识(面试准备)
+
+[📖 Go 语言面试背景知识](docs/GO_INTERVIEW_GUIDE.md)——基于本项目实操,覆盖类型系统、错误处理、Context、net/http、SQLite、测试、并发模型和常见面试追问。
 
 ## 文件命名
 
