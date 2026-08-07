@@ -55,6 +55,9 @@ func (s *Server) handleCreateDevice(w http.ResponseWriter, r *http.Request) {
 		Name                string `json:"name"`
 		Kind                string `json:"kind"`
 		Version             string `json:"version"`
+		Hostname            string `json:"hostname"`
+		Arch                string `json:"arch"`
+		OS                  string `json:"os"`
 		HeartbeatIntervalMs int64  `json:"heartbeat_interval_ms"`
 	}
 	if !decodeJSON(w, r, &req) {
@@ -70,6 +73,9 @@ func (s *Server) handleCreateDevice(w http.ResponseWriter, r *http.Request) {
 		Name:                req.Name,
 		Kind:                req.Kind,
 		Version:             req.Version,
+		Hostname:            req.Hostname,
+		Arch:                req.Arch,
+		OS:                  req.OS,
 		HeartbeatIntervalMs: req.HeartbeatIntervalMs,
 		FirstSeenMs:         now,
 	}
@@ -131,8 +137,10 @@ func (s *Server) handleGetDevice(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var req struct {
-		Seq int64 `json:"seq"`
-		Ts  int64 `json:"ts_ms"`
+		Seq       int64              `json:"seq"`
+		Ts        int64              `json:"ts_ms"`
+		SessionID string             `json:"session_id"`
+		Metrics   *domain.HostMetrics `json:"metrics"`
 	}
 	if !decodeJSON(w, r, &req) {
 		return
@@ -145,7 +153,11 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		req.Ts = s.eval.Now()
 	}
 	if err := s.store.AddHeartbeat(r.Context(), domain.Heartbeat{
-		DeviceID: id, Seq: req.Seq, TsMs: req.Ts,
+		DeviceID:  id,
+		Seq:       req.Seq,
+		TsMs:      req.Ts,
+		SessionID: req.SessionID,
+		Metrics:   req.Metrics,
 	}); err != nil {
 		switch {
 		case errors.Is(err, store.ErrNotFound):
@@ -172,7 +184,7 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Domain == "" {
-		writeErr(w, http.StatusBadRequest, "domain is required (amr|panda|...)")
+		writeErr(w, http.StatusBadRequest, "domain is required (amr|panda|...）")
 		return
 	}
 	now := s.eval.Now()

@@ -21,7 +21,8 @@ func newStore(t *testing.T) *store.Store {
 
 func mustDevice(t *testing.T, s *store.Store, id string) *domain.Device {
 	t.Helper()
-	d := &domain.Device{ID: id, Name: "test-dev", Kind: "dev", Version: "v0.1.0", FirstSeenMs: 1000}
+	d := &domain.Device{ID: id, Name: "test-dev", Kind: "dev", Version: "v0.1.0",
+		Hostname: "opi-test", Arch: "aarch64", OS: "Linux 6.1", FirstSeenMs: 1000}
 	if err := s.CreateDevice(context.Background(), d); err != nil {
 		t.Fatalf("create device: %v", err)
 	}
@@ -38,21 +39,18 @@ func TestDeviceCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get device: %v", err)
 	}
-	if got.Name != d.Name || got.Kind != "dev" {
+	if got.Name != d.Name || got.Hostname != "opi-test" || got.Arch != "aarch64" {
 		t.Errorf("unexpected device: %+v", got)
 	}
 
-	// 重复注册 → ErrConflict
 	if err := s.CreateDevice(ctx, d); !errors.Is(err, store.ErrConflict) {
 		t.Errorf("duplicate create: want ErrConflict, got %v", err)
 	}
 
-	// 不存在 → ErrNotFound
 	if _, err := s.GetDevice(ctx, "dev-nope"); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("missing device: want ErrNotFound, got %v", err)
 	}
 
-	// 列表
 	devs, err := s.ListDevices(ctx)
 	if err != nil {
 		t.Fatalf("list devices: %v", err)
@@ -74,7 +72,6 @@ func TestHeartbeatSeqStrictlyIncreasing(t *testing.T) {
 		t.Fatalf("second heartbeat: %v", err)
 	}
 
-	// seq 回退/重复 → ErrSeqRegression
 	if err := s.AddHeartbeat(ctx, domain.Heartbeat{DeviceID: "dev-1", Seq: 2, TsMs: 4000}); !errors.Is(err, store.ErrSeqRegression) {
 		t.Errorf("duplicate seq: want ErrSeqRegression, got %v", err)
 	}
@@ -82,7 +79,6 @@ func TestHeartbeatSeqStrictlyIncreasing(t *testing.T) {
 		t.Errorf("regressed seq: want ErrSeqRegression, got %v", err)
 	}
 
-	// last_seen 被更新,且 LastHeartbeat 返回最新
 	d, err := s.GetDevice(ctx, "dev-1")
 	if err != nil {
 		t.Fatalf("get device: %v", err)
@@ -107,12 +103,73 @@ func TestHeartbeatUnknownDevice(t *testing.T) {
 	}
 }
 
+func TestHeartbeatWithMetricsAndSession(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	mustDevice(t, s, "dev-1")
+
+	cpu := 23.5
+	mem := 67.1
+	temp := 45.0
+	can := false
+	hb := domain.Heartbeat{
+		DeviceID:  "dev-1",
+		Seq:       1,
+		TsMs:      2000,
+		SessionID: "sess-abc123",
+		Metrics: &domain.HostMetrics{
+			CPUPercent:         &cpu,
+			MemoryPercent:      &mem,
+			TemperatureCelsius: &temp,
+			CanAvailable:       &can,
+			RuntimeState:       "idle",
+		},
+	}
+	if err := s.AddHeartbeat(ctx, hb); err != nil {
+		t.Fatalf("heartbeat with metrics: %v", err)
+	}
+
+	last, err := s.LastHeartbeat(ctx, "dev-1")
+	if err != nil {
+		t.Fatalf("last heartbeat: %v", err)
+	}
+	if last.SessionID != "sess-abc123" {
+		t.Errorf("session_id: want sess-abc123, got %s", last.SessionID)
+	}
+	if last.Metrics == nil {
+		t.Fatal("metrics is nil")
+	}
+	if *last.Metrics.CPUPercent != 23.5 || *last.Metrics.MemoryPercent != 67.1 ||
+		*last.Metrics.CanAvailable != false || last.Metrics.RuntimeState != "idle" {
+		t.Errorf("metrics mismatch: %+v", last.Metrics)
+	}
+	if last.Metrics.TemperatureCelsius == nil || *last.Metrics.TemperatureCelsius != 45.0 {
+		t.Errorf("temperature: want 45.0, got %v", last.Metrics.TemperatureCelsius)
+	}
+
+	// 重启 session(新 session_id,seq 继续递增)
+	cpu2 := 10.0
+	hb2 := domain.Heartbeat{
+		DeviceID:  "dev-1",
+		Seq:       2,
+		TsMs:      3000,
+		SessionID: "sess-def456",
+		Metrics:   &domain.HostMetrics{CPUPercent: &cpu2},
+	}
+	if err := s.AddHeartbeat(ctx, hb2); err != nil {
+		t.Fatalf("second session heartbeat: %v", err)
+	}
+	last2, _ := s.LastHeartbeat(ctx, "dev-1")
+	if last2.SessionID != "sess-def456" {
+		t.Errorf("new session_id: want sess-def456, got %s", last2.SessionID)
+	}
+}
+
 func TestTaskAndRun(t *testing.T) {
 	s := newStore(t)
 	ctx := context.Background()
 	mustDevice(t, s, "dev-1")
 
-	// task 创建 + 状态过滤
 	t1 := &domain.Task{ID: "task-1", Domain: "amr", Kind: "transport", Target: "station_a", Status: domain.TaskPending, CreatedMs: 100, UpdatedMs: 100}
 	t2 := &domain.Task{ID: "task-2", Domain: "panda", Kind: "collect", Target: "red-box", Status: domain.TaskSucceeded, CreatedMs: 200, UpdatedMs: 200}
 	if err := s.CreateTask(ctx, t1); err != nil {
@@ -136,13 +193,11 @@ func TestTaskAndRun(t *testing.T) {
 		t.Errorf("want 2 tasks, got %d", len(all))
 	}
 
-	// run:引用不存在的 task/device → ErrBadReference
 	bad := &domain.Run{ID: "run-bad", TaskID: "task-nope", DeviceID: "dev-1", StartedMs: 1}
 	if err := s.CreateRun(ctx, bad); !errors.Is(err, store.ErrBadReference) {
 		t.Errorf("bad task ref: want ErrBadReference, got %v", err)
 	}
 
-	// run 创建 + 查询
 	run := &domain.Run{ID: "run-1", TaskID: "task-1", DeviceID: "dev-1", StartedMs: 300, Result: "succeeded", ArtifactRef: "release/e2_scene_preflight_20260718_v1"}
 	if err := s.CreateRun(ctx, run); err != nil {
 		t.Fatalf("create run: %v", err)

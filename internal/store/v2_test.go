@@ -571,7 +571,7 @@ func TestEndSession(t *testing.T) {
 	mustSession(t, s, "rt-1", "sess-1")
 
 	// 结束 session
-	if err := s.EndRuntimeSession(ctx, "rt-1", "sess-1", 5000); err != nil {
+	if _, err := s.EndRuntimeSession(ctx, "rt-1", "sess-1", 5000); err != nil {
 		t.Fatalf("end session: %v", err)
 	}
 
@@ -584,7 +584,7 @@ func TestEndSession(t *testing.T) {
 	}
 
 	// 再次结束 → no-op
-	if err := s.EndRuntimeSession(ctx, "rt-1", "sess-1", 6000); err != nil {
+	if _, err := s.EndRuntimeSession(ctx, "rt-1", "sess-1", 6000); err != nil {
 		t.Fatalf("second end session: %v", err)
 	}
 
@@ -598,7 +598,7 @@ func TestEndSession(t *testing.T) {
 	}
 
 	// 不存在的 session → ErrNotFound
-	if err := s.EndRuntimeSession(ctx, "rt-1", "sess-nope", 7000); !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.EndRuntimeSession(ctx, "rt-1", "sess-nope", 7000); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("end unknown session: want ErrNotFound, got %v", err)
 	}
 }

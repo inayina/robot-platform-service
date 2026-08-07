@@ -26,6 +26,10 @@ type Device struct {
 	FirstSeenMs         int64        `json:"first_seen_ms"`
 	LastSeenMs          int64        `json:"last_seen_ms"`
 	Status              DeviceStatus `json:"status"`
+	// Edge Agent 宿主信息(Phase 2:Edge Agent 集成新增)
+	Hostname string `json:"hostname,omitempty"`
+	Arch     string `json:"arch,omitempty"`
+	OS       string `json:"os,omitempty"`
 }
 
 // Heartbeat 心跳上报结构:seq 必须严格递增(与主仓命令合同的理念一致)。
@@ -33,6 +37,19 @@ type Heartbeat struct {
 	DeviceID string `json:"device_id"`
 	Seq      int64  `json:"seq"`
 	TsMs     int64  `json:"ts_ms"`
+	// Edge Agent 扩展(Phase 2)
+	SessionID string       `json:"session_id,omitempty"` // Agent 每次重启后变化
+	Metrics   *HostMetrics `json:"metrics,omitempty"`    // 主机实时指标
+}
+
+// HostMetrics 主机实时指标(Edge Agent 周期性上报)。
+// 这是心跳携带的可选扩展字段,不由平台核心模型长期存储(当前随 heartbeat 记录)。
+type HostMetrics struct {
+	CPUPercent         *float64 `json:"cpu_percent,omitempty"`         // 0-100,Nil = 未采集
+	MemoryPercent      *float64 `json:"memory_percent,omitempty"`      // 0-100
+	TemperatureCelsius *float64 `json:"temperature_celsius,omitempty"` // 读不到温度时明确为 nil→unavailable
+	CanAvailable       *bool    `json:"can_available,omitempty"`       // Nil = 未判断(Agent 启动前)
+	RuntimeState       string   `json:"runtime_state,omitempty"`       // "idle"/"shutdown"/"degraded"
 }
 
 // TaskStatus 任务状态枚举,平台级标准(与 amr Mock WMS 5 态口径一致)。

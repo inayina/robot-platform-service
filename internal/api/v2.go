@@ -506,7 +506,7 @@ func (s *ServerV2) handleEndSession(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("sid")
 	now := s.eval.Now()
 
-	if err := s.store.EndRuntimeSession(r.Context(), runtimeID, sessionID, now); err != nil {
+	if _, err := s.store.EndRuntimeSession(r.Context(), runtimeID, sessionID, now); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeErr(w, http.StatusNotFound, "session not found")
 			return
@@ -622,54 +622,33 @@ var validDeviceClasses = map[domain.DeviceClass]bool{
 	domain.DeviceComposite:  true,
 }
 
-func isValidDeviceClass(c domain.DeviceClass) bool {
-	return validDeviceClasses[c]
-}
+// ──── helpers ────
+
+func isValidDeviceClass(c domain.DeviceClass) bool { return validDeviceClasses[c] }
 
 var validRuntimeRoles = map[domain.RuntimeRole]bool{
-	domain.RuntimeControlRuntime: true,
-	domain.RuntimeDomainExecutor: true,
-	domain.RuntimeDeviceBridge:   true,
-	domain.RuntimeReplayExecutor: true,
+	domain.RuntimeControlRuntime: true, domain.RuntimeDomainExecutor: true,
+	domain.RuntimeDeviceBridge: true, domain.RuntimeReplayExecutor: true,
 }
+func isValidRuntimeRole(r domain.RuntimeRole) bool { return validRuntimeRoles[r] }
 
-func isValidRuntimeRole(r domain.RuntimeRole) bool {
-	return validRuntimeRoles[r]
-}
-
-// decodeJSONStrict 用于 canonical identity 的 create commands。未知字段必须拒绝，
-// 因而 caller 不能通过 body 注入 id、lifecycle_state 或 server-owned timestamp。
 func decodeJSONStrict(w http.ResponseWriter, r *http.Request, dst any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(dst); err != nil {
-		if errors.Is(err, io.EOF) {
-			writeErr(w, http.StatusBadRequest, "empty body")
-			return false
-		}
+		if errors.Is(err, io.EOF) { writeErr(w, http.StatusBadRequest, "empty body"); return false }
 		writeErr(w, http.StatusBadRequest, "invalid json: "+err.Error())
-		return false
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		writeErr(w, http.StatusBadRequest, "invalid json: multiple values")
 		return false
 	}
 	return true
 }
 
 func newCanonicalID(w http.ResponseWriter, prefix string) (string, bool) {
-	id, err := store.NewCanonicalID(prefix)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "could not allocate canonical identity")
+	id := store.NewID(prefix)
+	if _, err := store.ValidateCanonicalID(id, prefix); err != nil {
+		writeErr(w, http.StatusInternalServerError, "id generation failed")
 		return "", false
 	}
 	return id, true
 }
-
-// 确保 api.go 的 decodeJSON/writeJSON/writeErr 对 management_v2.go 可见(同包)。
-// 以下编译时断言仅作文档用途，防止误删。
-var _ = decodeJSON
-var _ = writeJSON
-var _ = writeErr
-var _ = json.NewEncoder
